@@ -5,8 +5,6 @@ import os
 import time
 import random
 from datetime import datetime, timedelta
-import matplotlib.pyplot as plt
-import io
 from collections import Counter
 
 # ========== НАСТРОЙКИ ==========
@@ -223,7 +221,145 @@ def check_mute_for_order(user_id):
 
 # ========== БАЗА ИГР ==========
 GAMES_DATABASE = {
-    # ... (все игры из предыдущей версии) ...
+    'minecraft': list(range(932, 936)),
+    'gta v': list(range(705, 743)),
+    'cyberpunk 2077': list(range(658, 705)),
+    'elden ring': list(range(552, 588)),
+    'witcher 3': list(range(986, 1006)),
+    'hotline miami 2': [1159, 1160],
+    'nier automata': list(range(164, 174)),
+    'little nightmares 3': list(range(174, 183)),
+    'rock star life simulator': list(range(184, 187)),
+    'system shock 2 remaster': list(range(187, 193)),
+    'gta san andreas': list(range(193, 196)),
+    'uber soldier': list(range(197, 202)),
+    'palworld': list(range(202, 217)),
+    'scorn': list(range(217, 228)),
+    'one shot': list(range(1065, 1070)),
+    'jewel match': list(range(234, 237)),
+    'far cry 5': list(range(242, 255)),
+    'red dead redemption 2': list(range(428, 486)),
+    'spider man remastered': list(range(486, 517)),
+    'no im not a human': list(range(517, 521)),
+    'call of duty ww2': list(range(521, 542)),
+    'red dead redemption': list(range(542, 549)),
+    'plants vs zombies': list(range(549, 552)),
+    'quasimorph': list(range(589, 592)),
+    'goat simulator': list(range(618, 622)),
+    'finding frankie': list(range(622, 627)),
+    'sally face': list(range(628, 633)),
+    'the forest': list(range(633, 636)),
+    'hollow knight silksong': [1204, 1205, 1206],
+    'slime rancher 2': list(range(1323, 1326)),
+    'far cry 4': list(range(1354, 1370)),
+    'bendy and the ink machine': list(range(652, 655)),
+    'caves of qud': list(range(655, 658)),
+    's.t.a.l.k.e.r. shadow of chernobyl': list(range(1326, 1330)),
+    'stalker shadow of chernobyl': list(range(1326, 1330)),
+    'stalker soc': list(range(1326, 1330)),
+    'hearts of iron iv': list(range(743, 748)),
+    'friday night funkin': list(range(748, 751)),
+    'dying light': list(range(751, 776)),
+    'borderlands 2': list(range(776, 783)),
+    'far cry 3': list(range(783, 788)),
+    'resident evil revelations 2': list(range(788, 799)),
+    'gta iv': list(range(799, 811)),
+    'my gaming club': list(range(811, 814)),
+    'orion sandbox': list(range(814, 817)),
+    'cuphead': list(range(817, 822)),
+    'beholder': list(range(823, 826)),
+    'resident evil village': list(range(826, 846)),
+    'resident evil resistance': list(range(1330, 1347)),
+    'my winter car': list(range(1347, 1350)),
+    'terraria 1.4.4.9': list(range(1350, 1353)),
+    'the spike': list(range(846, 853)),
+    'slim rancher': list(range(853, 858)),
+    'garrys mod': list(range(858, 861)),
+    'beamng drive': list(range(861, 874)),
+    'payday the heist': list(range(876, 880)),
+    'dark souls 3': list(range(880, 895)),
+    'prototype 1': list(range(895, 902)),
+    'gta vice city stories': list(range(902, 905)),
+    'teardown': list(range(906, 913)),
+    'antonblast': list(range(913, 916)),
+    'fifa 17': list(range(916, 932)),
+    'half life 2': list(range(1207, 1212)),
+    'call of duty modern 2': list(range(1212, 1222)),
+    'frostpunk': list(range(1222, 1229)),
+    'fallout 4': list(range(1277, 1297)),
+    'portal knights': list(range(1237, 1240)),
+    'fallout 3': list(range(1231, 1237)),
+    'stray': list(range(936, 942)),
+    'mafia 1': list(range(1241, 1244)),
+    'devil may cry 4 special edition': list(range(1244, 1259)),
+    'gta san andreas definitive edition': list(range(1259, 1271)),
+    'gta sa definitive': list(range(1259, 1271)),
+    'mafia 2': list(range(942, 948)),
+    'five nights at freddys': list(range(948, 951)),
+    'rimworld': list(range(1298, 1302)),
+    'third crisis': list(range(1302, 1306)),
+    'blender': list(range(1306, 1311)),
+    'hitman blood money': list(range(951, 961)),
+    'hitman 2016': list(range(962, 986)),
+    'dispatch': list(range(1311, 1321)),
+    'hard time 3': list(range(1006, 1010)),
+    'watch dogs 2': list(range(1010, 1028)),
+    'assassins creed': list(range(1028, 1034)),
+    'world box': list(range(1036, 1041)),
+    'streets of rogue 2': list(range(1041, 1044)),
+    'prototype 2': list(range(1044, 1051)),
+    'metro 2033': list(range(1051, 1057)),
+    'mysided': list(range(1057, 1060)),
+    'hollow knight': list(range(1060, 1063)),
+    'project zomboid': list(range(1093, 1096)),
+    'humanit z': list(range(1096, 1111)),
+    'bioshock remaster': list(range(1070, 1081)),
+    'fl studio 25': list(range(1153, 1157)),
+    'the last of us': list(range(1119, 1153)),
+    'gta liberty city stories': list(range(1082, 1085)),
+    'hotline miami': list(range(1085, 1088)),
+    'gta iii': list(range(1088, 1091)),
+    'undertale': list(range(1376, 1379)),
+    'ghostrunner': list(range(1379, 1389)),
+    'корсары 3': list(range(1370, 1373)),
+    'korsary 3': list(range(1370, 1373)),
+    'construction simulator 4': list(range(1373, 1376)),
+    'строительный симулятор 4': list(range(1373, 1376)),
+    'hytale': list(range(1398, 1403)),
+    'detroit become human': list(range(1407, 1437)),
+    'detroit': list(range(1407, 1437)),
+    'far cry 2': list(range(1437, 1441)),
+    'my summer car': list(range(1441, 1444)),
+    'the long drive': list(range(1444, 1447)),
+    'lonarpg': list(range(1447, 1450)),
+    'gta vice city': list(range(1450, 1453)),
+    'counter strike 1.6': list(range(1453, 1456)),
+    'cs 1.6': list(range(1453, 1456)),
+    'farm frenzy': list(range(1456, 1459)),
+    'terraria': list(range(1459, 1462)),
+    'five nights at freddys secret of the mimic': list(range(1462, 1474)),
+    'fnaf secret of the mimic': list(range(1462, 1474)),
+    'bully': list(range(1474, 1478)),
+    'bully scholarship edition': list(range(1474, 1478)),
+    'cry of fear': list(range(1481, 1487)),
+    'cry of fear 2012': list(range(1481, 1487)),
+    'tomb raider 2013': list(range(1487, 1497)),
+    'tomb raider': list(range(1487, 1497)),
+    'лара крофт': list(range(1487, 1497)),
+    'hearts of iron iv: ultimate bundle': list(range(1497, 1502)),
+    'hearts of iron iv ultimate bundle': list(range(1497, 1502)),
+    'dying light: the beast': list(range(1502, 1526)),
+    'dying light the beast': list(range(1502, 1526)),
+    'ghost of tsushima': list(range(1527, 1552)),
+    'clair obscur: expedition 33': list(range(1552, 1576)),
+    'clair obscur expedition 33': list(range(1552, 1576)),
+    'dead space': list(range(1576, 1581)),
+    'dead space remake': list(range(1581, 1600)),
+    'hollow knight: silksong': list(range(1600, 1603)),
+    'people playground': list(range(1603, 1606)),
+    'metro last light redux': list(range(1606, 1612)),
+    'postal 2': list(range(1615, 1618)),
+    'risk of rain 2': list(range(1612, 1615)),
     'frostpunk 2': list(range(1619, 1628)),
     'frostpunk2': list(range(1619, 1628)),
     's.t.a.l.k.e.r anomaly': list(range(1628, 1635)),
@@ -528,108 +664,7 @@ def stats_cmd(message):
     text += f"📅 Активен дней: {days_active}\n"
     text += f"💎 Премиум: {premium_status}\n"
 
-    # Кнопка для подробной статистики с графиком
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("📊 Подробная статистика", callback_data="detailed_stats"))
-
-    bot.send_message(message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
-
-
-# ========== ПОДРОБНАЯ СТАТИСТИКА С ГРАФИКОМ ==========
-def generate_stats_chart(user_id):
-    """Генерирует график активности пользователя"""
-    try:
-        # Собираем данные
-        user_orders = [o for o in orders if o.get('user_id') == user_id]
-
-        if not user_orders:
-            return None
-
-        # Группируем по месяцам
-        months = {}
-        for order in user_orders:
-            try:
-                date = datetime.fromisoformat(order['date'])
-                month_key = date.strftime("%Y-%m")
-                if month_key not in months:
-                    months[month_key] = 0
-                months[month_key] += 1
-            except:
-                pass
-
-        if not months:
-            return None
-
-        # Сортируем по дате
-        sorted_months = sorted(months.keys())
-        values = [months[m] for m in sorted_months]
-        labels = [m[5:7] + "/" + m[2:4] for m in sorted_months]  # ММ/ГГ
-
-        # Создаём график
-        plt.figure(figsize=(10, 6))
-        plt.bar(labels, values, color='#36A2EB')
-        plt.title('Активность по заказам', fontsize=16)
-        plt.xlabel('Месяц/Год', fontsize=12)
-        plt.ylabel('Количество заказов', fontsize=12)
-        plt.grid(axis='y', alpha=0.3)
-
-        # Сохраняем в буфер
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=100)
-        buf.seek(0)
-        plt.close()
-
-        return buf
-    except Exception as e:
-        print(f"Ошибка создания графика: {e}")
-        return None
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "detailed_stats")
-def detailed_stats_callback(call):
-    user_id = call.from_user.id
-
-    # Получаем статистику
-    user_orders = [o for o in orders if o.get('user_id') == user_id]
-
-    if not user_orders:
-        bot.answer_callback_query(call.id, "❌ Недостаточно данных для статистики")
-        return
-
-    # Считаем статистику
-    total_orders = len(user_orders)
-    total_likes = sum(o.get('likes', 0) for o in user_orders)
-    avg_likes = total_likes / total_orders if total_orders > 0 else 0
-
-    # Самая популярная игра пользователя
-    games_count = {}
-    for order in user_orders:
-        game = order['game']
-        games_count[game] = games_count.get(game, 0) + 1
-
-    most_popular = max(games_count.items(), key=lambda x: x[1]) if games_count else ("нет", 0)
-
-    # Текст статистики
-    text = f"📊 *Детальная статистика*\n\n"
-    text += f"📋 Всего заказов: {total_orders}\n"
-    text += f"❤️ Всего лайков: {total_likes}\n"
-    text += f"⭐ Средний лайк: {avg_likes:.1f}\n"
-    text += f"🎮 Частая игра: {most_popular[0]} ({most_popular[1]} раз)\n\n"
-
-    # График
-    chart_buf = generate_stats_chart(user_id)
-
-    if chart_buf:
-        bot.send_photo(
-            call.message.chat.id,
-            photo=chart_buf,
-            caption=text,
-            parse_mode='Markdown'
-        )
-    else:
-        bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
-
-    bot.answer_callback_query(call.id)
+    bot.send_message(message.chat.id, text, parse_mode='Markdown')
 
 
 # ========== КОМАНДА TOP ==========
@@ -664,7 +699,6 @@ def moderator_cmd(message):
         types.InlineKeyboardButton("👑 Добавить админа", callback_data="mod_addadmin"),
         types.InlineKeyboardButton("🔨 Бан", callback_data="mod_ban"),
         types.InlineKeyboardButton("🔇 Мут (заказы)", callback_data="mod_mute"),
-        types.InlineKeyboardButton("📈 Графики", callback_data="mod_charts"),
         types.InlineKeyboardButton("💎 Премиум", callback_data="mod_premium"),
     ]
 
@@ -1243,41 +1277,6 @@ def callback_handler(call):
                              "🔇 *Команды мута (только на заказы)*\n\n"
                              "`/mute 123 причина [часы]` - замутить\n"
                              "`/unmute 123` - снять мут")
-
-        elif call.data == 'mod_charts':
-            # Генерируем графики для админа
-            try:
-                # График заказов по дням
-                dates = []
-                for order in orders:
-                    try:
-                        date = datetime.fromisoformat(order['date']).strftime("%d.%m")
-                        dates.append(date)
-                    except:
-                        pass
-
-                if dates:
-                    date_counts = Counter(dates)
-                    sorted_dates = sorted(date_counts.keys())
-                    values = [date_counts[d] for d in sorted_dates]
-
-                    plt.figure(figsize=(12, 6))
-                    plt.plot(range(len(sorted_dates)), values, marker='o', color='#36A2EB')
-                    plt.xticks(range(len(sorted_dates)), sorted_dates, rotation=45)
-                    plt.title('Заказы по дням', fontsize=16)
-                    plt.grid(alpha=0.3)
-
-                    buf = io.BytesIO()
-                    plt.savefig(buf, format='png', dpi=100)
-                    buf.seek(0)
-                    plt.close()
-
-                    bot.send_photo(call.message.chat.id, photo=buf, caption="📈 *График заказов*", parse_mode='Markdown')
-                else:
-                    bot.send_message(call.message.chat.id, "📊 Нет данных для графика")
-
-            except Exception as e:
-                bot.send_message(call.message.chat.id, f"❌ Ошибка создания графика: {e}")
 
         elif call.data == 'mod_premium':
             bot.send_message(call.message.chat.id,
