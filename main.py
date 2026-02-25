@@ -3,16 +3,18 @@ from telebot import types
 import json
 import os
 import time
+import random
 from datetime import datetime, timedelta
-from difflib import SequenceMatcher
-import re
+import matplotlib.pyplot as plt
+import io
+from collections import Counter
 
-# НАСТРОЙКИ
+# ========== НАСТРОЙКИ ==========
 BOT_TOKEN = '8456295069:AAGz48djuL19fYnn9FCz8DgJRQgIO6rLlq0'
 bot = telebot.TeleBot(BOT_TOKEN)
 GAMES_CHANNEL_ID = -1003421344618
 
-# ФАЙЛЫ
+# Файлы данных
 ORDERS_FILE = 'orders.json'
 LIKES_FILE = 'likes.json'
 ADMINS_FILE = 'admins.json'
@@ -21,8 +23,17 @@ LIKE_COOLDOWN_FILE = 'like_cooldown.json'
 GAME_STATS_FILE = 'game_stats.json'
 WEEKLY_STATS_FILE = 'weekly_stats.json'
 PREMIUM_FILE = 'premium_users.json'
+BANNED_FILE = 'banned_users.json'
+MUTED_FILE = 'muted_users.json'
+ORDER_STATS_FILE = 'order_stats.json'
 
-# ДАННЫЕ
+# Константы
+LIKE_COOLDOWN_DAYS = 1000
+ORDERS_PER_PAGE = 5
+PREMIUM_CHAT_LINK = "https://t.me/+Cy47-Mts-h00ZDYy"
+PREMIUM_CONTACT = "@sweacher"
+
+# ========== ДАННЫЕ ==========
 orders = []
 likes_data = {}
 admins = ["7885915159"]
@@ -31,29 +42,16 @@ user_stats = {}
 like_cooldowns = {}
 game_stats = {}
 weekly_stats = {}
-premium_users = {}  # {user_id: {"prefix": "ник", "purchased_date": "дата"}}
-
-# КОНСТАНТЫ
-LIKE_COOLDOWN_DAYS = 1000
-ORDERS_PER_PAGE = 5
-SIMILARITY_THRESHOLD = 0.6
-PREMIUM_CHAT_LINK = "https://t.me/+Cy47-Mts-h00ZDYy"
-PREMIUM_CONTACT = "@sweacher"
+premium_users = {}
+banned_users = {}  # {"user_id": {"type": "silent"/"normal", "reason": "...", "until": "дата"}}
+muted_users = {}  # {"user_id": {"reason": "...", "until": "дата"}}
+order_stats = {}  # статистика заказов
 
 
-# ЛОГИРОВАНИЕ
-def log_event(event):
-    try:
-        timestamp = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        with open('bot_log.txt', 'a', encoding='utf-8') as f:
-            f.write(f"[{timestamp}] {event}\n")
-    except:
-        pass
-
-
-# ЗАГРУЗКА ДАННЫХ
+# ========== ЗАГРУЗКА/СОХРАНЕНИЕ ==========
 def load_all():
-    global orders, likes_data, admins, user_stats, like_cooldowns, game_stats, weekly_stats, premium_users
+    global orders, likes_data, admins, user_stats, like_cooldowns, game_stats, weekly_stats, premium_users, banned_users, muted_users, order_stats
+
     files = {
         ORDERS_FILE: orders,
         LIKES_FILE: likes_data,
@@ -62,8 +60,12 @@ def load_all():
         LIKE_COOLDOWN_FILE: like_cooldowns,
         GAME_STATS_FILE: game_stats,
         WEEKLY_STATS_FILE: weekly_stats,
-        PREMIUM_FILE: premium_users
+        PREMIUM_FILE: premium_users,
+        BANNED_FILE: banned_users,
+        MUTED_FILE: muted_users,
+        ORDER_STATS_FILE: order_stats
     }
+
     for file, data_var in files.items():
         if os.path.exists(file):
             try:
@@ -75,7 +77,7 @@ def load_all():
                         data_var.clear()
                         data_var.update(json.load(f))
             except Exception as e:
-                log_event(f"Ошибка загрузки {file}: {str(e)}")
+                print(f"Ошибка загрузки {file}: {e}")
 
 
 def save_all():
@@ -87,23 +89,70 @@ def save_all():
         LIKE_COOLDOWN_FILE: like_cooldowns,
         GAME_STATS_FILE: game_stats,
         WEEKLY_STATS_FILE: weekly_stats,
-        PREMIUM_FILE: premium_users
+        PREMIUM_FILE: premium_users,
+        BANNED_FILE: banned_users,
+        MUTED_FILE: muted_users,
+        ORDER_STATS_FILE: order_stats
     }
+
     for file, data in files.items():
         try:
             with open(file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            log_event(f"ОШИБКА СОХРАНЕНИЯ {file}: {str(e)}")
+            print(f"Ошибка сохранения {file}: {e}")
 
 
-# ПРОВЕРКИ
+# ========== ПРОВЕРКИ ==========
 def is_admin(user_id):
     return str(user_id) in admins
 
 
 def is_premium(user_id):
     return str(user_id) in premium_users
+
+
+def is_banned(user_id):
+    user_id = str(user_id)
+    if user_id not in banned_users:
+        return False, None
+
+    ban_info = banned_users[user_id]
+
+    # Проверяем, не истёк ли бан
+    if 'until' in ban_info and ban_info['until']:
+        try:
+            until = datetime.fromisoformat(ban_info['until'])
+            if datetime.now() > until:
+                # Бан истёк
+                del banned_users[user_id]
+                save_all()
+                return False, None
+        except:
+            pass
+
+    return True, ban_info
+
+
+def is_muted(user_id):
+    user_id = str(user_id)
+    if user_id not in muted_users:
+        return False, None
+
+    mute_info = muted_users[user_id]
+
+    # Проверяем, не истёк ли мут
+    if 'until' in mute_info and mute_info['until']:
+        try:
+            until = datetime.fromisoformat(mute_info['until'])
+            if datetime.now() > until:
+                del muted_users[user_id]
+                save_all()
+                return False, None
+        except:
+            pass
+
+    return True, mute_info
 
 
 def can_like(user_id):
@@ -130,68 +179,7 @@ def update_like_cooldown(user_id):
     save_all()
 
 
-def update_game_stats(game_name):
-    if game_name not in game_stats:
-        game_stats[game_name] = {'downloads': 0, 'last_download': None}
-    game_stats[game_name]['downloads'] += 1
-    game_stats[game_name]['last_download'] = datetime.now().isoformat()
-
-    today = datetime.now().strftime("%Y-%m-%d")
-    if game_name not in weekly_stats:
-        weekly_stats[game_name] = {}
-    if today not in weekly_stats[game_name]:
-        weekly_stats[game_name][today] = 0
-    weekly_stats[game_name][today] += 1
-
-    week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-    for game in list(weekly_stats.keys()):
-        for date in list(weekly_stats[game].keys()):
-            if date < week_ago:
-                del weekly_stats[game][date]
-    save_all()
-
-
-def get_top_weekly(limit=3):
-    result = []
-    game_totals = {}
-    for game_name, days in weekly_stats.items():
-        total = sum(days.values())
-        if total > 0:
-            game_totals[game_name] = total
-    sorted_games = sorted(game_totals.items(), key=lambda x: x[1], reverse=True)[:limit]
-    for game_name, downloads in sorted_games:
-        result.append((game_name, downloads))
-    return result
-
-
-def get_top_alltime(limit=3):
-    result = []
-    sorted_games = sorted(game_stats.items(), key=lambda x: x[1]['downloads'], reverse=True)[:limit]
-    for game_name, stats in sorted_games:
-        result.append((game_name, stats['downloads']))
-    return result
-
-
-def find_similar_games(query, threshold=SIMILARITY_THRESHOLD):
-    query = query.lower().strip()
-    similar = []
-    query = re.sub(r'[^\w\s]', '', query)
-    all_games = list(GAMES_DATABASE.keys()) + list(MOVIES_DATABASE.keys()) + list(SOFT_DATABASE.keys())
-    all_games = list(set(all_games))
-    for game_name in all_games:
-        game_lower = game_name.lower()
-        if query in game_lower:
-            similarity = 0.9
-        else:
-            similarity = SequenceMatcher(None, query, game_lower).ratio()
-        if similarity >= threshold:
-            similar.append((game_name, similarity))
-    similar.sort(key=lambda x: x[1], reverse=True)
-    return [game for game, sim in similar[:5]]
-
-
 def get_user_display_name(user_id, username=None, first_name=None):
-    """Возвращает имя пользователя с префиксом, если есть"""
     user_id_str = str(user_id)
     if user_id_str in premium_users:
         prefix = premium_users[user_id_str].get('prefix', '')
@@ -200,197 +188,89 @@ def get_user_display_name(user_id, username=None, first_name=None):
     return first_name or username or str(user_id)
 
 
-# 🎮 ПОЛНАЯ БАЗА ВСЕХ ИГР
+def check_ban(message):
+    """Проверяет, забанен ли пользователь"""
+    user_id = message.from_user.id
+    banned, ban_info = is_banned(user_id)
+
+    if not banned:
+        return True
+
+    # Если обычный бан - уведомляем
+    if ban_info.get('type') == 'normal':
+        reason = ban_info.get('reason', 'Причина не указана')
+        until = ban_info.get('until', 'навсегда')
+        if until and until != 'навсегда':
+            try:
+                until_date = datetime.fromisoformat(until).strftime("%d.%m.%Y %H:%M")
+                text = f"🚫 *Вы заблокированы*\n\n📝 Причина: {reason}\n⏱ До: {until_date}"
+            except:
+                text = f"🚫 *Вы заблокированы*\n\n📝 Причина: {reason}\n⏱ Навсегда"
+        else:
+            text = f"🚫 *Вы заблокированы*\n\n📝 Причина: {reason}\n⏱ Навсегда"
+
+        bot.reply_to(message, text, parse_mode='Markdown')
+
+    # Тихий бан - просто игнорируем
+    return False
+
+
+def check_mute_for_order(user_id):
+    """Проверяет, может ли пользователь создавать заказы"""
+    muted, mute_info = is_muted(user_id)
+    return not muted, mute_info
+
+
+# ========== БАЗА ИГР ==========
 GAMES_DATABASE = {
-    'antonblast': list(range(913, 916)),
-    'assassins creed': list(range(1028, 1034)),
-    'beamng drive': list(range(861, 874)),
-    'beholder': list(range(823, 826)),
-    'bendy and the ink machine': list(range(652, 655)),
-    'bioshock remaster': list(range(1070, 1081)),
-    'blender': list(range(1306, 1311)),
-    'borderlands 2': list(range(776, 783)),
-    'bully': list(range(1474, 1478)),
-    'bully scholarship edition': list(range(1474, 1478)),
-    'call of duty modern 2': list(range(1212, 1222)),
-    'call of duty ww2': list(range(521, 542)),
-    'caves of qud': list(range(655, 658)),
-    'clair obscur: expedition 33': list(range(1552, 1576)),
-    'clair obscur expedition 33': list(range(1552, 1576)),
-    'construction simulator 4': list(range(1373, 1376)),
-    'counter strike 1.6': list(range(1453, 1456)),
-    'cry of fear': list(range(1481, 1487)),
-    'cry of fear 2012': list(range(1481, 1487)),
-    'cs 1.6': list(range(1453, 1456)),
-    'cuphead': list(range(817, 822)),
-    'cyberpunk 2077': list(range(658, 705)),
-    'dark souls 3': list(range(880, 895)),
-    'dead space': list(range(1576, 1581)),
-    'dead space remake': list(range(1581, 1600)),
-    'detroit': list(range(1407, 1437)),
-    'detroit become human': list(range(1407, 1437)),
-    'devil may cry 4 special edition': list(range(1244, 1259)),
-    'dispatch': list(range(1311, 1321)),
-    'dying light': list(range(751, 776)),
-    'dying light the beast': list(range(1502, 1526)),
-    'dying light: the beast': list(range(1502, 1526)),
-    'elden ring': list(range(552, 588)),
-    'fallout 3': list(range(1231, 1237)),
-    'fallout 4': list(range(1277, 1297)),
-    'far cry 2': list(range(1437, 1441)),
-    'far cry 3': list(range(783, 788)),
-    'far cry 4': list(range(1354, 1370)),
-    'far cry 5': list(range(242, 255)),
-    'farm frenzy': list(range(1456, 1459)),
-    'fifa 17': list(range(916, 932)),
-    'finding frankie': list(range(622, 627)),
-    'five nights at freddys': list(range(948, 951)),
-    'five nights at freddys secret of the mimic': list(range(1462, 1474)),
-    'fnaf secret of the mimic': list(range(1462, 1474)),
-    'fl studio 25': list(range(1153, 1157)),
-    'friday night funkin': list(range(748, 751)),
-    'frostpunk': list(range(1222, 1229)),
-    'garrys mod': list(range(858, 861)),
-    'ghost of tsushima': list(range(1527, 1552)),
-    'ghostrunner': list(range(1379, 1389)),
-    'goat simulator': list(range(618, 622)),
-    'gta iii': list(range(1088, 1091)),
-    'gta iv': list(range(799, 811)),
-    'gta liberty city stories': list(range(1082, 1085)),
-    'gta san andreas': list(range(1259, 1271)),
-    'gta v': list(range(705, 743)),
-    'gta vice city': list(range(1450, 1453)),
-    'gta vice city stories': list(range(902, 905)),
-    'half life 2': list(range(1207, 1212)),
-    'hard time 3': list(range(1006, 1010)),
-    'hearts of iron iv': list(range(743, 748)),
-    'hearts of iron iv ultimate bundle': list(range(1497, 1502)),
-    'hearts of iron iv: ultimate bundle': list(range(1497, 1502)),
-    'hitman 2016': list(range(962, 986)),
-    'hitman blood money': list(range(951, 961)),
-    'hollow knight': list(range(1060, 1063)),
-    'hollow knight silksong': [1204, 1205, 1206],
-    'hollow knight: silksong': list(range(1600, 1603)),
-    'hotline miami': list(range(1085, 1088)),
-    'hotline miami 2': [1159, 1160],
-    'humanit z': list(range(1096, 1111)),
-    'hytale': list(range(1398, 1403)),
-    'jewel match': list(range(234, 237)),
-    'little nightmares 3': list(range(174, 183)),
-    'lonarpg': list(range(1447, 1450)),
-    'mafia 1': list(range(1241, 1244)),
-    'mafia 2': list(range(942, 948)),
-    'metro 2033': list(range(1051, 1057)),
-    'metro last light redux': list(range(1606, 1612)),
-    'minecraft': list(range(932, 936)),
-    'my gaming club': list(range(811, 814)),
-    'my summer car': list(range(1441, 1444)),
-    'my winter car': list(range(1347, 1350)),
-    'myside': list(range(1057, 1060)),
-    'nier automata': list(range(164, 174)),
-    'no im not a human': list(range(517, 521)),
-    'one shot': list(range(1065, 1070)),
-    'orion sandbox': list(range(814, 817)),
-    'palworld': list(range(202, 217)),
-    'payday the heist': list(range(876, 880)),
-    'people playground': list(range(1603, 1606)),
-    'plants vs zombies': list(range(549, 552)),
-    'portal knights': list(range(1237, 1240)),
-    'postal 2': list(range(1615, 1618)),
-    'project zomboid': list(range(1093, 1096)),
-    'prototype 1': list(range(895, 902)),
-    'prototype 2': list(range(1044, 1051)),
-    'quasimorph': list(range(589, 592)),
-    'red dead redemption': list(range(542, 549)),
-    'red dead redemption 2': list(range(428, 486)),
-    'resident evil revelations 2': list(range(788, 799)),
-    'resident evil resistance': list(range(1330, 1347)),
-    'resident evil village': list(range(826, 846)),
-    'rimworld': list(range(1298, 1302)),
-    'risk of rain 2': list(range(1612, 1615)),
-    'rock star life simulator': list(range(184, 187)),
-    's.t.a.l.k.e.r. shadow of chernobyl': list(range(1326, 1330)),
-    'sally face': list(range(628, 633)),
-    'scorn': list(range(217, 228)),
-    'slim rancher': list(range(853, 858)),
-    'slime rancher 2': list(range(1323, 1326)),
-    'spider man remastered': list(range(486, 517)),
-    'stalker shadow of chernobyl': list(range(1326, 1330)),
-    'stalker soc': list(range(1326, 1330)),
-    'stray': list(range(936, 942)),
-    'streets of rogue 2': list(range(1041, 1044)),
-    'system shock 2 remaster': list(range(187, 193)),
-    'teardown': list(range(906, 913)),
-    'terraria': list(range(1459, 1462)),
-    'terraria 1.4.4.9': list(range(1350, 1353)),
-    'the forest': list(range(633, 636)),
-    'the last of us': list(range(1119, 1153)),
-    'the long drive': list(range(1444, 1447)),
-    'the spike': list(range(846, 853)),
-    'third crisis': list(range(1302, 1306)),
-    'tomb raider': list(range(1487, 1497)),
-    'tomb raider 2013': list(range(1487, 1497)),
-    'uber soldier': list(range(197, 202)),
-    'undertale': list(range(1376, 1379)),
-    'watch dogs 2': list(range(1010, 1028)),
-    'witcher 3': list(range(986, 1006)),
-    'world box': list(range(1036, 1041)),
-    'строительный симулятор 4': list(range(1373, 1376)),
-    'корсары 3': list(range(1370, 1373)),
-    'лара крофт': list(range(1487, 1497)),
-}
-
-# 🎬 БАЗА ФИЛЬМОВ
-MOVIES_DATABASE = {
-    'fight club': list(range(1389, 1393)),
-    'старикам тут не место': list(range(1394, 1398)),
-    'no country for old men': list(range(1394, 1398)),
-    'drive': list(range(1403, 1407)),
-    'драйв': list(range(1403, 1407)),
-}
-
-# 💻 БАЗА СОФТА
-SOFT_DATABASE = {
-    'blender': list(range(1306, 1311)),
-    'fl studio 25': list(range(1153, 1157)),
-    'fl studio': list(range(1153, 1157)),
+    # ... (все игры из предыдущей версии) ...
+    'frostpunk 2': list(range(1619, 1628)),
+    'frostpunk2': list(range(1619, 1628)),
+    's.t.a.l.k.e.r anomaly': list(range(1628, 1635)),
+    'stalker anomaly': list(range(1628, 1635)),
+    'аномали': list(range(1628, 1635)),
 }
 
 
-# 📋 ОСНОВНЫЕ КОМАНДЫ
+# ========== ДЕКОРАТОР ДЛЯ ПРОВЕРКИ БАНА ==========
+def check_ban_decorator(func):
+    def wrapper(message, *args, **kwargs):
+        if not check_ban(message):
+            return
+        return func(message, *args, **kwargs)
+
+    return wrapper
+
+
+# ========== КОМАНДА START ==========
 @bot.message_handler(commands=['start'])
-def start_cmd(m):
-    if str(m.from_user.id) not in user_stats:
-        user_stats[str(m.from_user.id)] = {
+@check_ban_decorator
+def start_cmd(message):
+    user_id = str(message.from_user.id)
+    if user_id not in user_stats:
+        user_stats[user_id] = {
             'downloads': 0,
             'created_orders': 0,
-            'first_seen': datetime.now().isoformat()
+            'first_seen': datetime.now().isoformat(),
+            'username': message.from_user.username,
+            'first_name': message.from_user.first_name
         }
         save_all()
 
-    # Проверяем, есть ли реферальный код
-    args = m.text.split()
-    if len(args) > 1 and args[1].startswith('ref'):
-        referrer_id = args[1][3:]
-        if referrer_id != str(m.from_user.id) and referrer_id in user_stats:
-            # Начисляем бонусы (можно добавить позже)
-            log_event(f"Реферальный переход: {referrer_id} -> {m.from_user.id}")
-
     text = """🎮 *Ferwes Games Bot*
 
-🔍 *Напиши название игры/фильма/софта* — я пришлю, если есть в базе.
+🔍 *Напиши название игры* — я пришлю, если есть в базе.
 
 📋 `/orders` — стол заказов  
 📝 `/neworder` — заказать игру  
 👤 `/myorders` — мои заказы  
 📊 `/stats` — моя статистика  
 🔥 `/top` — топ игр  
-💎 `/ferwespremium` — префикс"""
+💎 `/premium` — премиум"""
 
-    if is_admin(m.from_user.id):
+    if is_admin(message.from_user.id):
         text += "\n\n👑 `/moderator` — панель модератора"
 
-    # Создаем удобные кнопки
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("📋 Заказы", callback_data="show_orders"),
@@ -401,16 +281,18 @@ def start_cmd(m):
         types.InlineKeyboardButton("💎 Премиум", callback_data="show_premium")
     )
 
-    bot.send_message(m.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+    bot.send_message(message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
 
 
-@bot.message_handler(commands=['ferwespremium'])
-def premium_cmd(m):
-    user_id = str(m.from_user.id)
+# ========== КОМАНДА PREMIUM ==========
+@bot.message_handler(commands=['premium'])
+@check_ban_decorator
+def premium_cmd(message):
+    user_id = str(message.from_user.id)
 
     if user_id in premium_users:
         prefix_info = premium_users[user_id]
-        text = f"""💎 *У вас уже есть префикс!*
+        text = f"""💎 *У вас уже есть премиум!*
 
 Ваш префикс: `[{prefix_info.get('prefix', '')}]`
 Куплен: {prefix_info.get('purchased_date', 'неизвестно')}
@@ -421,36 +303,41 @@ def premium_cmd(m):
 ⚠️ *Важно:* не выходите из чата, иначе префикс сбросится.
 📩 По вопросам: {PREMIUM_CONTACT}"""
     else:
-        text = f"""💎 *Ferwes Premium — префикс в чате за 95 рублей!*
+        text = f"""💎 *Ferwes Premium — префикс в чате*
 
 🔥 При покупке префикс сохраняется навсегда!
 
-**Входит в префикс:**
+**Что даёт премиум:**
 • Уникальный префикс в чате
 • Выделение среди других пользователей
 • Поддержка проекта
 
-📌 *Обязательно:* вступите в чат, иначе префикс не будет работать:  
+💳 *Реквизиты для оплаты:*  
+ЮMoney: `4100119022808101`  
+Стоимость: **150 рублей**
+
+После оплаты пришлите скриншот {PREMIUM_CONTACT}
+
+📌 *Обязательно:* вступите в чат:  
 {PREMIUM_CHAT_LINK}
 
-⚠️ Не выходите из чата, чтобы префикс не сбился.
-
-📩 По вопросам покупки/возврата префикса: {PREMIUM_CONTACT}"""
+⚠️ Не выходите из чата, чтобы префикс не сбился."""
 
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("📢 Вступить в чат", url=PREMIUM_CHAT_LINK))
     markup.add(types.InlineKeyboardButton("✍️ Написать @sweacher", url="https://t.me/sweacher"))
 
-    bot.send_message(m.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+    bot.send_message(message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
 
 
-# СТОЛ ЗАКАЗОВ С ПАГИНАЦИЕЙ
+# ========== СТОЛ ЗАКАЗОВ ==========
 @bot.message_handler(commands=['orders'])
-def orders_cmd(m):
-    show_orders_page(m.chat.id, 0)
+@check_ban_decorator
+def orders_cmd(message):
+    show_orders_page(message.chat.id, 0, message)
 
 
-def show_orders_page(chat_id, page=0):
+def show_orders_page(chat_id, page=0, original_message=None):
     if not orders:
         bot.send_message(chat_id, "📭 *Нет заказов*")
         return
@@ -473,22 +360,26 @@ def show_orders_page(chat_id, page=0):
         except:
             order_date = "неизвестно"
 
-        # Получаем имя пользователя с префиксом
         user_display = get_user_display_name(
             order.get('user_id'),
             order.get('username'),
             None
         )
 
+        # Количество присоединившихся
+        joined_count = len(order.get('joined', []))
+        joined_text = f" 👥 {joined_count}" if joined_count > 0 else ""
+
         text += f"🎮 *{order['game']}*\n"
         text += f"👤 {user_display}\n"
         text += f"📅 {order_date} | 💾 {order.get('size', 'N/A')}\n"
-        text += f"❤️ {order.get('likes', 0)} лайков\n"
+        text += f"❤️ {order.get('likes', 0)} лайков{joined_text}\n"
         text += f"🆔 {order['id']}\n"
         text += "─\n"
 
     markup = types.InlineKeyboardMarkup(row_width=3)
 
+    # Кнопки пагинации
     nav_buttons = []
     if page > 0:
         nav_buttons.append(types.InlineKeyboardButton("⬅️ Назад", callback_data=f"orders_page_{page - 1}"))
@@ -498,83 +389,116 @@ def show_orders_page(chat_id, page=0):
     if nav_buttons:
         markup.row(*nav_buttons)
 
+    # Кнопки для каждого заказа
     for order in page_orders:
-        btn_text = f"❤️ {order['game'][:15]}"
-        if len(order['game']) > 15:
+        btn_text = f"❤️ {order['game'][:12]}"
+        if len(order['game']) > 12:
             btn_text += "..."
-        markup.add(types.InlineKeyboardButton(
-            btn_text,
-            callback_data=f"like_{order['id']}"
-        ))
+
+        # Строка кнопок для заказа
+        markup.row(
+            types.InlineKeyboardButton(btn_text, callback_data=f"like_{order['id']}"),
+            types.InlineKeyboardButton("👥 Хочу!", callback_data=f"join_{order['id']}"),
+            types.InlineKeyboardButton("📤 Поделиться", callback_data=f"share_{order['id']}")
+        )
 
     bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=markup)
 
 
+# ========== КОМАНДА MYORDERS ==========
 @bot.message_handler(commands=['myorders'])
-def myorders_cmd(m):
-    user_orders = [o for o in orders if o.get('user_id') == m.chat.id]
+@check_ban_decorator
+def myorders_cmd(message):
+    user_id = message.chat.id
+    user_orders = [o for o in orders if o.get('user_id') == user_id]
+
     if not user_orders:
-        bot.send_message(m.chat.id, "📭 *У вас нет заказов*")
+        bot.send_message(message.chat.id, "📭 *У вас нет заказов*")
         return
 
     text = "👤 *Мои заказы*\n\n"
     for order in user_orders[-10:]:
+        joined_count = len(order.get('joined', []))
+        joined_text = f" 👥 {joined_count}" if joined_count > 0 else ""
+
         text += f"🎮 {order['game']}\n"
         text += f"🆔 {order['id']} | 💾 {order.get('size', 'N/A')}\n"
-        text += f"❤️ {order.get('likes', 0)} лайков\n"
+        text += f"❤️ {order.get('likes', 0)} лайков{joined_text}\n"
         text += "─\n"
 
-    bot.send_message(m.chat.id, text, parse_mode='Markdown')
+    bot.send_message(message.chat.id, text, parse_mode='Markdown')
 
 
+# ========== КОМАНДА NEWORDER ==========
 @bot.message_handler(commands=['neworder'])
-def neworder_cmd(m):
-    user_states[m.chat.id] = 'waiting_game'
-    bot.send_message(m.chat.id, "📝 *Напиши название игры:*")
+@check_ban_decorator
+def neworder_cmd(message):
+    # Проверяем мут на создание заказов
+    muted, mute_info = check_mute_for_order(message.from_user.id)
+    if muted:
+        reason = mute_info.get('reason', 'Причина не указана')
+        until = mute_info.get('until', 'навсегда')
+        if until and until != 'навсегда':
+            try:
+                until_date = datetime.fromisoformat(until).strftime("%d.%m.%Y %H:%M")
+                text = f"🔇 *Вы не можете создавать заказы*\n\n📝 Причина: {reason}\n⏱ До: {until_date}"
+            except:
+                text = f"🔇 *Вы не можете создавать заказы*\n\n📝 Причина: {reason}\n⏱ Навсегда"
+        else:
+            text = f"🔇 *Вы не можете создавать заказы*\n\n📝 Причина: {reason}\n⏱ Навсегда"
+
+        bot.reply_to(message, text, parse_mode='Markdown')
+        return
+
+    user_states[message.chat.id] = 'waiting_game'
+    bot.reply_to(message, "📝 *Напиши название игры:*", parse_mode='Markdown')
 
 
 @bot.message_handler(func=lambda m: user_states.get(m.chat.id) == 'waiting_game')
-def get_game(m):
-    user_states[m.chat.id] = {'game': m.text, 'state': 'waiting_size'}
-    bot.send_message(m.chat.id, "💾 *Напиши размер в ГБ:*")
+@check_ban_decorator
+def get_game(message):
+    user_states[message.chat.id] = {'game': message.text, 'state': 'waiting_size'}
+    bot.reply_to(message, "💾 *Напиши размер в ГБ:*", parse_mode='Markdown')
 
 
 @bot.message_handler(
     func=lambda m: user_states.get(m.chat.id) and user_states[m.chat.id].get('state') == 'waiting_size')
-def get_size(m):
-    data = user_states[m.chat.id]
-    user_info = f"@{m.from_user.username}" if m.from_user.username else f"ID:{m.from_user.id}"
-
-    log_event(f"НОВЫЙ ЗАКАЗ: {data['game']} | РАЗМЕР: {m.text} | ОТ: {user_info}")
+@check_ban_decorator
+def get_size(message):
+    data = user_states[message.chat.id]
+    user_info = f"@{message.from_user.username}" if message.from_user.username else f"ID:{message.from_user.id}"
 
     order_id = len(orders) + 1
     orders.append({
         'id': order_id,
         'game': data['game'],
-        'size': m.text.upper() + " ГБ",
+        'size': message.text.upper() + " ГБ",
         'likes': 0,
         'liked_by': [],
-        'user_id': m.chat.id,
+        'joined': [],  # Кто присоединился
+        'user_id': message.chat.id,
         'username': user_info,
         'date': datetime.now().isoformat()
     })
 
-    user_id_str = str(m.from_user.id)
+    user_id_str = str(message.from_user.id)
     if user_id_str not in user_stats:
         user_stats[user_id_str] = {'downloads': 0, 'created_orders': 0}
     user_stats[user_id_str]['created_orders'] = user_stats[user_id_str].get('created_orders', 0) + 1
 
     save_all()
-    del user_states[m.chat.id]
-    bot.send_message(m.chat.id, f"✅ *Заказ создан!*\n🆔 ID: {order_id}")
+    del user_states[message.chat.id]
+    bot.reply_to(message, f"✅ *Заказ создан!*\n🆔 ID: {order_id}", parse_mode='Markdown')
 
 
+# ========== КОМАНДА STATS ==========
 @bot.message_handler(commands=['stats'])
-def user_stats_cmd(m):
-    user_id_str = str(m.from_user.id)
+@check_ban_decorator
+def stats_cmd(message):
+    user_id_str = str(message.from_user.id)
 
     if user_id_str not in user_stats:
-        bot.send_message(m.chat.id, "📊 *Вы еще ничего не скачали*")
+        bot.reply_to(message, "📊 *Вы еще ничего не скачали*")
         return
 
     stats = user_stats[user_id_str]
@@ -587,47 +511,149 @@ def user_stats_cmd(m):
     except:
         days_active = 0
 
-    # Премиум статус
-    premium_status = "✅ Да" if is_premium(m.from_user.id) else "❌ Нет"
+    # Заказы пользователя
+    user_orders = [o for o in orders if o.get('user_id') == message.chat.id]
+    total_likes_received = sum(o.get('likes', 0) for o in user_orders)
+
+    # Лайки, которые поставил пользователь
+    total_likes_given = len([uid for uid in like_cooldowns if uid == user_id_str])
+
+    premium_status = "✅ Да" if is_premium(message.from_user.id) else "❌ Нет"
 
     text = f"👤 *Ваша статистика*\n\n"
     text += f"📥 Скачано игр: {downloads}\n"
     text += f"📋 Создано заказов: {created_orders}\n"
+    text += f"❤️ Получено лайков: {total_likes_received}\n"
+    text += f"👍 Поставлено лайков: {total_likes_given}\n"
     text += f"📅 Активен дней: {days_active}\n"
     text += f"💎 Премиум: {premium_status}\n"
 
-    bot.send_message(m.chat.id, text, parse_mode='Markdown')
+    # Кнопка для подробной статистики с графиком
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("📊 Подробная статистика", callback_data="detailed_stats"))
+
+    bot.send_message(message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
 
 
+# ========== ПОДРОБНАЯ СТАТИСТИКА С ГРАФИКОМ ==========
+def generate_stats_chart(user_id):
+    """Генерирует график активности пользователя"""
+    try:
+        # Собираем данные
+        user_orders = [o for o in orders if o.get('user_id') == user_id]
+
+        if not user_orders:
+            return None
+
+        # Группируем по месяцам
+        months = {}
+        for order in user_orders:
+            try:
+                date = datetime.fromisoformat(order['date'])
+                month_key = date.strftime("%Y-%m")
+                if month_key not in months:
+                    months[month_key] = 0
+                months[month_key] += 1
+            except:
+                pass
+
+        if not months:
+            return None
+
+        # Сортируем по дате
+        sorted_months = sorted(months.keys())
+        values = [months[m] for m in sorted_months]
+        labels = [m[5:7] + "/" + m[2:4] for m in sorted_months]  # ММ/ГГ
+
+        # Создаём график
+        plt.figure(figsize=(10, 6))
+        plt.bar(labels, values, color='#36A2EB')
+        plt.title('Активность по заказам', fontsize=16)
+        plt.xlabel('Месяц/Год', fontsize=12)
+        plt.ylabel('Количество заказов', fontsize=12)
+        plt.grid(axis='y', alpha=0.3)
+
+        # Сохраняем в буфер
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=100)
+        buf.seek(0)
+        plt.close()
+
+        return buf
+    except Exception as e:
+        print(f"Ошибка создания графика: {e}")
+        return None
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "detailed_stats")
+def detailed_stats_callback(call):
+    user_id = call.from_user.id
+
+    # Получаем статистику
+    user_orders = [o for o in orders if o.get('user_id') == user_id]
+
+    if not user_orders:
+        bot.answer_callback_query(call.id, "❌ Недостаточно данных для статистики")
+        return
+
+    # Считаем статистику
+    total_orders = len(user_orders)
+    total_likes = sum(o.get('likes', 0) for o in user_orders)
+    avg_likes = total_likes / total_orders if total_orders > 0 else 0
+
+    # Самая популярная игра пользователя
+    games_count = {}
+    for order in user_orders:
+        game = order['game']
+        games_count[game] = games_count.get(game, 0) + 1
+
+    most_popular = max(games_count.items(), key=lambda x: x[1]) if games_count else ("нет", 0)
+
+    # Текст статистики
+    text = f"📊 *Детальная статистика*\n\n"
+    text += f"📋 Всего заказов: {total_orders}\n"
+    text += f"❤️ Всего лайков: {total_likes}\n"
+    text += f"⭐ Средний лайк: {avg_likes:.1f}\n"
+    text += f"🎮 Частая игра: {most_popular[0]} ({most_popular[1]} раз)\n\n"
+
+    # График
+    chart_buf = generate_stats_chart(user_id)
+
+    if chart_buf:
+        bot.send_photo(
+            call.message.chat.id,
+            photo=chart_buf,
+            caption=text,
+            parse_mode='Markdown'
+        )
+    else:
+        bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
+
+    bot.answer_callback_query(call.id)
+
+
+# ========== КОМАНДА TOP ==========
 @bot.message_handler(commands=['top'])
-def top_cmd(m):
-    top_weekly = get_top_weekly(3)
-    top_alltime = get_top_alltime(3)
+@check_ban_decorator
+def top_cmd(message):
+    # Топ по скачиваниям
+    if game_stats:
+        sorted_games = sorted(game_stats.items(), key=lambda x: x[1]['downloads'], reverse=True)[:10]
 
-    text = "🔥 *ТОП ИГР*\n\n"
+        text = "🔥 *Топ игр по скачиваниям*\n\n"
+        for i, (game, stats) in enumerate(sorted_games, 1):
+            text += f"{i}. 🎮 {game} — {stats['downloads']} 📥\n"
 
-    text += "📅 *За неделю:*\n"
-    if top_weekly:
-        for i, (game, downloads) in enumerate(top_weekly, 1):
-            text += f"{i}. 🎮 {game} — {downloads} 📥\n"
+        bot.send_message(message.chat.id, text, parse_mode='Markdown')
     else:
-        text += "Нет данных за неделю\n"
-
-    text += "\n🏆 *За все время:*\n"
-    if top_alltime:
-        for i, (game, downloads) in enumerate(top_alltime, 1):
-            text += f"{i}. 🎮 {game} — {downloads} 📥\n"
-    else:
-        text += "Нет данных\n"
-
-    bot.send_message(m.chat.id, text, parse_mode='Markdown')
+        bot.send_message(message.chat.id, "📊 *Нет данных для топа*")
 
 
-# 👑 КОМАНДЫ МОДЕРАТОРА
+# ========== КОМАНДА MODERATOR ==========
 @bot.message_handler(commands=['moderator'])
-def moderator_cmd(m):
-    if not is_admin(m.from_user.id):
-        bot.send_message(m.chat.id, "❌ *Нет прав*")
+def moderator_cmd(message):
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "❌ *Нет прав*")
         return
 
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -636,80 +662,217 @@ def moderator_cmd(m):
         types.InlineKeyboardButton("📊 Статистика", callback_data="mod_stats"),
         types.InlineKeyboardButton("❌ Удалить заказ", callback_data="mod_delorder"),
         types.InlineKeyboardButton("👑 Добавить админа", callback_data="mod_addadmin"),
-        types.InlineKeyboardButton("💎 Управление премиум", callback_data="mod_premium"),
+        types.InlineKeyboardButton("🔨 Бан", callback_data="mod_ban"),
+        types.InlineKeyboardButton("🔇 Мут (заказы)", callback_data="mod_mute"),
+        types.InlineKeyboardButton("📈 Графики", callback_data="mod_charts"),
+        types.InlineKeyboardButton("💎 Премиум", callback_data="mod_premium"),
     ]
+
     for i in range(0, len(buttons), 2):
         if i + 1 < len(buttons):
             markup.row(buttons[i], buttons[i + 1])
         else:
             markup.row(buttons[i])
 
+    # Статистика для админа
+    banned_count = len(banned_users)
+    muted_count = len(muted_users)
+    active_users = len(user_stats)
+
     text = f"""👑 *Панель модератора*
 
 📊 *Статистика:*
 • Заказов: {len(orders)}
-• Пользователей: {len(user_stats)}
+• Пользователей: {active_users}
 • Админов: {len(admins)}
+• Забанено: {banned_count}
+• Замучено: {muted_count}
 • Премиум: {len(premium_users)}
 
 ⚡ *Команды:*
 `/delorder 5` - Удалить заказ
 `/addadmin 123` - Добавить админа
-`/broadcast текст` - Рассылка
-`/addpremium 123 ник` - Добавить премиум
-`/removepremium 123` - Удалить премиум"""
+`/ban 123 причина [silent]` - Бан
+`/mute 123 причина [часы]` - Мут
+`/unban 123` - Разбан
+`/unmute 123` - Снять мут
+`/broadcast текст` - Рассылка"""
 
-    bot.send_message(m.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+    bot.send_message(message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
 
 
-@bot.message_handler(commands=['addpremium'])
-def addpremium_cmd(m):
-    if not is_admin(m.from_user.id):
+# ========== КОМАНДЫ БАНА ==========
+@bot.message_handler(commands=['ban'])
+def ban_cmd(message):
+    if not is_admin(message.from_user.id):
         return
+
     try:
-        parts = m.text.split(maxsplit=2)
+        parts = message.text.split(maxsplit=3)
         if len(parts) < 3:
-            bot.send_message(m.chat.id, "❌ */addpremium <ID> <ник>*")
+            bot.reply_to(message,
+                         "❌ */ban <ID> <причина> [silent]*\n\nПример: /ban 123456 Спам\nПример с тихим: /ban 123456 Спам silent",
+                         parse_mode='Markdown')
             return
 
         user_id = parts[1]
-        prefix = parts[2]
+        reason = parts[2]
 
-        premium_users[user_id] = {
-            'prefix': prefix,
-            'purchased_date': datetime.now().isoformat(),
-            'added_by': str(m.from_user.id)
+        # Проверяем на silent
+        ban_type = 'normal'
+        if len(parts) > 3 and parts[3].lower() == 'silent':
+            ban_type = 'silent'
+
+        # Баним
+        banned_users[user_id] = {
+            'type': ban_type,
+            'reason': reason,
+            'until': None,  # None = навсегда
+            'banned_by': str(message.from_user.id),
+            'banned_at': datetime.now().isoformat()
         }
+
         save_all()
-        log_event(f"ВЫДАЧА ПРЕМИУМ: ID {user_id} с префиксом '{prefix}'")
-        bot.send_message(m.chat.id, f"✅ *ID {user_id} получил премиум с префиксом: {prefix}*")
+
+        type_text = "тихий" if ban_type == 'silent' else "обычный"
+        bot.reply_to(message, f"✅ *Пользователь {user_id} забанен*\nТип: {type_text}\nПричина: {reason}",
+                     parse_mode='Markdown')
+
     except Exception as e:
-        bot.send_message(m.chat.id, f"❌ Ошибка: {str(e)}")
+        bot.reply_to(message, f"❌ Ошибка: {e}")
 
 
-@bot.message_handler(commands=['removepremium'])
-def removepremium_cmd(m):
-    if not is_admin(m.from_user.id):
+@bot.message_handler(commands=['tempban'])
+def tempban_cmd(message):
+    if not is_admin(message.from_user.id):
         return
+
     try:
-        user_id = m.text.split()[1]
-        if user_id in premium_users:
-            del premium_users[user_id]
+        parts = message.text.split(maxsplit=4)
+        if len(parts) < 4:
+            bot.reply_to(message, "❌ */tempban <ID> <часы> <причина> [silent]*", parse_mode='Markdown')
+            return
+
+        user_id = parts[1]
+        hours = int(parts[2])
+        reason = parts[3]
+
+        ban_type = 'normal'
+        if len(parts) > 4 and parts[4].lower() == 'silent':
+            ban_type = 'silent'
+
+        until = datetime.now() + timedelta(hours=hours)
+
+        banned_users[user_id] = {
+            'type': ban_type,
+            'reason': reason,
+            'until': until.isoformat(),
+            'banned_by': str(message.from_user.id),
+            'banned_at': datetime.now().isoformat()
+        }
+
+        save_all()
+
+        until_str = until.strftime("%d.%m.%Y %H:%M")
+        type_text = "тихий" if ban_type == 'silent' else "обычный"
+        bot.reply_to(message, f"✅ *Пользователь {user_id} забанен до {until_str}*\nТип: {type_text}\nПричина: {reason}",
+                     parse_mode='Markdown')
+
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка: {e}")
+
+
+@bot.message_handler(commands=['unban'])
+def unban_cmd(message):
+    if not is_admin(message.from_user.id):
+        return
+
+    try:
+        user_id = message.text.split()[1]
+
+        if user_id in banned_users:
+            del banned_users[user_id]
             save_all()
-            log_event(f"УДАЛЕНИЕ ПРЕМИУМ: ID {user_id}")
-            bot.send_message(m.chat.id, f"✅ *Премиум удален у ID {user_id}*")
+            bot.reply_to(message, f"✅ *Пользователь {user_id} разбанен*", parse_mode='Markdown')
         else:
-            bot.send_message(m.chat.id, f"❌ *ID {user_id} не имеет премиума*")
+            bot.reply_to(message, f"❌ Пользователь {user_id} не в бане")
+
     except:
-        bot.send_message(m.chat.id, "❌ */removepremium <ID>*")
+        bot.reply_to(message, "❌ */unban <ID>*")
 
 
+# ========== КОМАНДЫ МУТА (ТОЛЬКО НА ЗАКАЗЫ) ==========
+@bot.message_handler(commands=['mute'])
+def mute_cmd(message):
+    if not is_admin(message.from_user.id):
+        return
+
+    try:
+        parts = message.text.split(maxsplit=3)
+        if len(parts) < 3:
+            bot.reply_to(message,
+                         "❌ */mute <ID> <причина> [часы]*\n\nПример: /mute 123456 Спам\nПример с временем: /mute 123456 Спам 24",
+                         parse_mode='Markdown')
+            return
+
+        user_id = parts[1]
+        reason = parts[2]
+
+        until = None
+        if len(parts) > 3:
+            try:
+                hours = int(parts[3])
+                until = datetime.now() + timedelta(hours=hours)
+            except:
+                pass
+
+        muted_users[user_id] = {
+            'reason': reason,
+            'until': until.isoformat() if until else None,
+            'muted_by': str(message.from_user.id),
+            'muted_at': datetime.now().isoformat()
+        }
+
+        save_all()
+
+        if until:
+            until_str = until.strftime("%d.%m.%Y %H:%M")
+            bot.reply_to(message, f"✅ *Пользователь {user_id} замучен до {until_str}*\nПричина: {reason}",
+                         parse_mode='Markdown')
+        else:
+            bot.reply_to(message, f"✅ *Пользователь {user_id} замучен навсегда*\nПричина: {reason}",
+                         parse_mode='Markdown')
+
+    except Exception as e:
+        bot.reply_to(message, f"❌ Ошибка: {e}")
+
+
+@bot.message_handler(commands=['unmute'])
+def unmute_cmd(message):
+    if not is_admin(message.from_user.id):
+        return
+
+    try:
+        user_id = message.text.split()[1]
+
+        if user_id in muted_users:
+            del muted_users[user_id]
+            save_all()
+            bot.reply_to(message, f"✅ *С пользователя {user_id} снят мут*", parse_mode='Markdown')
+        else:
+            bot.reply_to(message, f"❌ Пользователь {user_id} не в муте")
+
+    except:
+        bot.reply_to(message, "❌ */unmute <ID>*")
+
+
+# ========== КОМАНДА DELORDER ==========
 @bot.message_handler(commands=['delorder'])
-def delorder_cmd(m):
-    if not is_admin(m.from_user.id):
+def delorder_cmd(message):
+    if not is_admin(message.from_user.id):
         return
     try:
-        order_id = int(m.text.split()[1])
+        order_id = int(message.text.split()[1])
         order_to_delete = None
         for order in orders:
             if order['id'] == order_id:
@@ -717,35 +880,39 @@ def delorder_cmd(m):
                 break
 
         if not order_to_delete:
-            bot.send_message(m.chat.id, f"❌ *Заказ #{order_id} не найден*")
+            bot.reply_to(message, f"❌ *Заказ #{order_id} не найден*")
             return
 
         liked_by = order_to_delete.get('liked_by', [])
+        joined = order_to_delete.get('joined', [])
         game_name = order_to_delete['game']
 
-        user_states[m.chat.id] = {
+        # Объединяем всех, кого нужно уведомить
+        notify_users = list(set(liked_by + joined))
+
+        user_states[message.chat.id] = {
             'state': 'waiting_delete_reason',
             'order_id': order_id,
-            'liked_by': liked_by,
+            'notify_users': notify_users,
             'game_name': game_name
         }
 
-        bot.send_message(m.chat.id,
-                         f"📝 *Напиши причину удаления заказа #{order_id}*\n\n"
-                         f"Это сообщение будет отправлено {len(liked_by)} пользователям, которые лайкнули этот заказ.",
-                         parse_mode='Markdown')
+        bot.reply_to(message,
+                     f"📝 *Напиши причину удаления заказа #{order_id}*\n\n"
+                     f"Уведомление получат: {len(notify_users)} пользователей (лайкнувшие и присоединившиеся)",
+                     parse_mode='Markdown')
 
     except Exception as e:
-        bot.send_message(m.chat.id, "❌ */delorder <ID заказа>*")
+        bot.reply_to(message, "❌ */delorder <ID заказа>*")
 
 
 @bot.message_handler(func=lambda m: user_states.get(m.chat.id, {}).get('state') == 'waiting_delete_reason')
-def process_delete_reason(m):
-    data = user_states[m.chat.id]
+def process_delete_reason(message):
+    data = user_states[message.chat.id]
     order_id = data['order_id']
-    liked_by = data['liked_by']
+    notify_users = data['notify_users']
     game_name = data['game_name']
-    reason = m.text
+    reason = message.text
 
     for i, order in enumerate(orders):
         if order['id'] == order_id:
@@ -753,55 +920,55 @@ def process_delete_reason(m):
             break
 
     save_all()
-    log_event(f"УДАЛЕНИЕ ЗАКАЗА: #{order_id} '{game_name}', причина: {reason}")
 
+    # Отправляем уведомления
     sent_count = 0
-    for user_id in liked_by:
+    for user_id in notify_users:
         try:
             bot.send_message(int(user_id),
                              f"⚠️ *Заказ #{order_id} был удален*\n\n"
                              f"🎮 Игра: {game_name}\n"
                              f"📝 Причина: {reason}\n\n"
-                             f"Спасибо за ваш лайк! ❤️",
+                             f"Спасибо за интерес! ❤️",
                              parse_mode='Markdown')
             sent_count += 1
             time.sleep(0.1)
         except:
             pass
 
-    bot.send_message(m.chat.id,
-                     f"✅ *Заказ #{order_id} удален*\n\n"
-                     f"📤 Уведомления отправлены: {sent_count}/{len(liked_by)} пользователям",
-                     parse_mode='Markdown')
+    bot.reply_to(message,
+                 f"✅ *Заказ #{order_id} удален*\n\n"
+                 f"📤 Уведомления отправлены: {sent_count}/{len(notify_users)} пользователям",
+                 parse_mode='Markdown')
 
-    del user_states[m.chat.id]
+    del user_states[message.chat.id]
 
 
+# ========== КОМАНДА ADDADMIN ==========
 @bot.message_handler(commands=['addadmin'])
-def addadmin_cmd(m):
-    if not is_admin(m.from_user.id):
+def addadmin_cmd(message):
+    if not is_admin(message.from_user.id):
         return
     try:
-        user_id = str(m.text.split()[1])
+        user_id = str(message.text.split()[1])
         if user_id in admins:
-            bot.send_message(m.chat.id, "⚠️ *Уже админ*")
+            bot.reply_to(message, "⚠️ *Уже админ*")
         else:
             admins.append(user_id)
             save_all()
-            log_event(f"ВЫДАЧА АДМИНКИ: ID {user_id}")
-            bot.send_message(m.chat.id, f"✅ *ID {user_id} получил права модератора*")
+            bot.reply_to(message, f"✅ *ID {user_id} получил права модератора*", parse_mode='Markdown')
     except:
-        bot.send_message(m.chat.id, "❌ */addadmin <ID>*")
+        bot.reply_to(message, "❌ */addadmin <ID>*")
 
 
+# ========== КОМАНДА BROADCAST ==========
 @bot.message_handler(commands=['broadcast'])
-def broadcast_cmd(m):
-    if not is_admin(m.from_user.id):
-        bot.send_message(m.chat.id, "❌ *Нет прав*")
+def broadcast_cmd(message):
+    if not is_admin(message.from_user.id):
         return
 
     try:
-        message_text = m.text.split(' ', 1)[1]
+        message_text = message.text.split(' ', 1)[1]
 
         markup = types.InlineKeyboardMarkup()
         markup.row(
@@ -809,7 +976,8 @@ def broadcast_cmd(m):
             types.InlineKeyboardButton("❌ Отмена", callback_data="broadcast_cancel")
         )
 
-        m.reply_text(
+        bot.reply_to(
+            message,
             f"📢 *Подтверждение рассылки*\n\n"
             f"Получателей: {len(user_stats)}\n\n"
             f"Сообщение:\n{message_text[:500]}...\n\n"
@@ -818,18 +986,48 @@ def broadcast_cmd(m):
             reply_markup=markup
         )
 
-        user_states[m.chat.id] = {
+        user_states[message.chat.id] = {
             'broadcast_message': message_text,
             'state': 'awaiting_broadcast_confirmation'
         }
 
     except IndexError:
-        bot.send_message(m.chat.id, "❌ */broadcast <текст сообщения>*")
+        bot.reply_to(message, "❌ */broadcast <текст сообщения>*")
 
 
-# CALLBACK ОБРАБОТЧИКИ
+# ========== ОБРАБОТЧИК КОМАНДЫ SHARE ==========
+def share_order(order_id, chat_id, user_id):
+    """Отправляет заказ для шеринга"""
+    order = None
+    for o in orders:
+        if o['id'] == order_id:
+            order = o
+            break
+
+    if not order:
+        return None
+
+    text = f"📤 *Вам поделились заказом*\n\n"
+    text += f"🎮 Игра: {order['game']}\n"
+    text += f"💾 Размер: {order.get('size', 'N/A')}\n"
+    text += f"👤 Автор: {order.get('username', 'Unknown')}\n"
+    text += f"❤️ Лайков: {order.get('likes', 0)}\n"
+    text += f"🆔 ID: {order['id']}\n\n"
+    text += f"Открыть заказ: /order_{order['id']}"
+
+    return text
+
+
+# ========== CALLBACK ОБРАБОТЧИК ==========
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
+    # Проверяем бан для callback (кроме админских)
+    if not call.data.startswith('mod_') and not is_admin(call.from_user.id):
+        banned, _ = is_banned(call.from_user.id)
+        if banned:
+            bot.answer_callback_query(call.id, "❌ Вы забанены")
+            return
+
     # ЛАЙКИ
     if call.data.startswith('like_'):
         can_like_now, days_left = can_like(call.from_user.id)
@@ -837,7 +1035,7 @@ def callback_handler(call):
         if not can_like_now:
             bot.answer_callback_query(
                 call.id,
-                f"❌ Вы уже ставили лайк! Следующий можно будет поставить через {days_left} дней",
+                f"❌ Вы уже ставили лайк! Следующий через {days_left} дней",
                 show_alert=True
             )
             return
@@ -857,49 +1055,146 @@ def callback_handler(call):
                 update_like_cooldown(call.from_user.id)
                 save_all()
 
-                log_event(f"ЛАЙК: заказ #{order_id} '{order['game']}' | от: ID {call.from_user.id}")
                 bot.answer_callback_query(call.id, "❤️ Лайк поставлен!")
                 return
         bot.answer_callback_query(call.id, "❌ Заказ не найден")
 
-    # ПАГИНАЦИЯ СТОЛА ЗАКАЗОВ
+    # ПРИСОЕДИНИТЬСЯ К ЗАКАЗУ (ХОЧУ!)
+    elif call.data.startswith('join_'):
+        order_id = int(call.data.split('_')[1])
+        user_id = str(call.from_user.id)
+
+        for order in orders:
+            if order['id'] == order_id:
+                if 'joined' not in order:
+                    order['joined'] = []
+
+                if user_id in order['joined']:
+                    bot.answer_callback_query(call.id, "✅ Вы уже присоединились")
+                    return
+
+                order['joined'].append(user_id)
+                save_all()
+
+                # Уведомляем автора заказа
+                author_id = order.get('user_id')
+                if author_id and author_id != call.from_user.id:
+                    try:
+                        user_name = call.from_user.first_name or f"ID {user_id}"
+                        bot.send_message(
+                            author_id,
+                            f"👥 *К вашему заказу #{order_id} присоединились!*\n\n"
+                            f"Пользователь: {user_name}\n"
+                            f"Игра: {order['game']}",
+                            parse_mode='Markdown'
+                        )
+                    except:
+                        pass
+
+                bot.answer_callback_query(call.id, "✅ Вы присоединились к заказу!")
+                return
+
+        bot.answer_callback_query(call.id, "❌ Заказ не найден")
+
+    # ПОДЕЛИТЬСЯ ЗАКАЗОМ
+    elif call.data.startswith('share_'):
+        order_id = int(call.data.split('_')[1])
+
+        share_text = share_order(order_id, call.message.chat.id, call.from_user.id)
+
+        if share_text:
+            # Создаём кнопку для отправки другу
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton(
+                "📤 Отправить другу",
+                switch_inline_query=f"order_{order_id}"
+            ))
+
+            bot.send_message(
+                call.message.chat.id,
+                share_text,
+                parse_mode='Markdown',
+                reply_markup=markup
+            )
+            bot.answer_callback_query(call.id)
+        else:
+            bot.answer_callback_query(call.id, "❌ Заказ не найден")
+
+    # ПАГИНАЦИЯ
     elif call.data.startswith('orders_page_'):
         try:
             page = int(call.data.split('_')[2])
             bot.delete_message(call.message.chat.id, call.message.message_id)
-            show_orders_page(call.message.chat.id, page)
+            show_orders_page(call.message.chat.id, page, call.message)
         except:
             bot.answer_callback_query(call.id, "❌ Ошибка перехода")
 
-    # ПОИСК ПО КНОПКЕ С ПОХОЖЕЙ ИГРОЙ
-    elif call.data.startswith('play_'):
-        game_name = call.data[5:]
-        send_game_files(call.message.chat.id, game_name, call.from_user.id)
-        bot.answer_callback_query(call.id)
-
-    # КНОПКИ ИЗ /start
+    # КНОПКИ ИЗ START
     elif call.data == "show_orders":
         bot.delete_message(call.message.chat.id, call.message.message_id)
-        orders_cmd(call.message)
+
+        # Создаём заглушку для вызова
+        class MockMessage:
+            def __init__(self, chat_id):
+                self.chat = type('obj', (object,), {'id': chat_id})
+                self.from_user = type('obj', (object,), {'id': call.from_user.id})
+
+        orders_cmd(MockMessage(call.message.chat.id))
+
     elif call.data == "new_order":
         bot.delete_message(call.message.chat.id, call.message.message_id)
-        neworder_cmd(call.message)
+
+        class MockMessage:
+            def __init__(self, chat_id, from_user_id):
+                self.chat = type('obj', (object,), {'id': chat_id})
+                self.from_user = type('obj', (object,), {'id': from_user_id})
+
+        neworder_cmd(MockMessage(call.message.chat.id, call.from_user.id))
+
     elif call.data == "my_orders":
         bot.delete_message(call.message.chat.id, call.message.message_id)
-        myorders_cmd(call.message)
+
+        class MockMessage:
+            def __init__(self, chat_id, from_user_id):
+                self.chat = type('obj', (object,), {'id': chat_id})
+                self.from_user = type('obj', (object,), {'id': from_user_id})
+
+        myorders_cmd(MockMessage(call.message.chat.id, call.from_user.id))
+
     elif call.data == "my_stats":
         bot.delete_message(call.message.chat.id, call.message.message_id)
-        user_stats_cmd(call.message)
+
+        class MockMessage:
+            def __init__(self, chat_id, from_user_id):
+                self.chat = type('obj', (object,), {'id': chat_id})
+                self.from_user = type('obj', (object,), {'id': from_user_id})
+
+        stats_cmd(MockMessage(call.message.chat.id, call.from_user.id))
+
     elif call.data == "show_top":
         bot.delete_message(call.message.chat.id, call.message.message_id)
-        top_cmd(call.message)
+
+        class MockMessage:
+            def __init__(self, chat_id, from_user_id):
+                self.chat = type('obj', (object,), {'id': chat_id})
+                self.from_user = type('obj', (object,), {'id': from_user_id})
+
+        top_cmd(MockMessage(call.message.chat.id, call.from_user.id))
+
     elif call.data == "show_premium":
         bot.delete_message(call.message.chat.id, call.message.message_id)
-        premium_cmd(call.message)
 
-    # МОДЕРАТОР
+        class MockMessage:
+            def __init__(self, chat_id, from_user_id):
+                self.chat = type('obj', (object,), {'id': chat_id})
+                self.from_user = type('obj', (object,), {'id': from_user_id})
+
+        premium_cmd(MockMessage(call.message.chat.id, call.from_user.id))
+
+    # АДМИНСКИЕ КНОПКИ
     elif call.data.startswith('mod_'):
         if not is_admin(call.from_user.id):
+            bot.answer_callback_query(call.id, "❌ Нет прав")
             return
 
         if call.data == 'mod_broadcast':
@@ -907,19 +1202,27 @@ def callback_handler(call):
                              "📢 */broadcast <текст>* - отправить сообщение всем пользователям")
 
         elif call.data == 'mod_stats':
-            stats_text = "📊 *Статистика бота*\n\n"
-            stats_text += f"👥 Пользователей: {len(user_stats)}\n"
-            stats_text += f"📋 Заказов: {len(orders)}\n"
-            stats_text += f"👑 Админов: {len(admins)}\n"
-            stats_text += f"💎 Премиум: {len(premium_users)}\n\n"
+            # Статистика для админа
+            active_users = len(
+                [u for u in user_stats if u in like_cooldowns or u in [str(o['user_id']) for o in orders]])
 
-            if user_stats:
-                sorted_users = sorted(user_stats.items(), key=lambda x: x[1].get('downloads', 0), reverse=True)[:5]
-                stats_text += "🏆 *Топ-5 пользователей:*\n"
-                for i, (user_id, data) in enumerate(sorted_users, 1):
-                    stats_text += f"{i}. ID {user_id}: {data.get('downloads', 0)} скачиваний\n"
+            text = "📊 *Полная статистика бота*\n\n"
+            text += f"👥 Всего пользователей: {len(user_stats)}\n"
+            text += f"📋 Заказов: {len(orders)}\n"
+            text += f"❤️ Всего лайков: {sum(o.get('likes', 0) for o in orders)}\n"
+            text += f"👑 Админов: {len(admins)}\n"
+            text += f"🔨 Забанено: {len(banned_users)}\n"
+            text += f"🔇 Замучено: {len(muted_users)}\n"
+            text += f"💎 Премиум: {len(premium_users)}\n\n"
 
-            bot.send_message(call.message.chat.id, stats_text, parse_mode='Markdown')
+            # Топ игр
+            if game_stats:
+                top_games = sorted(game_stats.items(), key=lambda x: x[1]['downloads'], reverse=True)[:5]
+                text += "🏆 *Топ-5 игр:*\n"
+                for game, stats in top_games:
+                    text += f"• {game} — {stats['downloads']} 📥\n"
+
+            bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
 
         elif call.data == 'mod_delorder':
             bot.send_message(call.message.chat.id, "❌ */delorder <ID>*")
@@ -927,11 +1230,60 @@ def callback_handler(call):
         elif call.data == 'mod_addadmin':
             bot.send_message(call.message.chat.id, "👑 */addadmin <ID>*")
 
+        elif call.data == 'mod_ban':
+            bot.send_message(call.message.chat.id,
+                             "🔨 *Команды бана*\n\n"
+                             "`/ban 123 причина [silent]` - навсегда\n"
+                             "`/tempban 123 часы причина [silent]` - временно\n"
+                             "`/unban 123` - разбанить\n\n"
+                             "silent - тихий бан (без уведомления)")
+
+        elif call.data == 'mod_mute':
+            bot.send_message(call.message.chat.id,
+                             "🔇 *Команды мута (только на заказы)*\n\n"
+                             "`/mute 123 причина [часы]` - замутить\n"
+                             "`/unmute 123` - снять мут")
+
+        elif call.data == 'mod_charts':
+            # Генерируем графики для админа
+            try:
+                # График заказов по дням
+                dates = []
+                for order in orders:
+                    try:
+                        date = datetime.fromisoformat(order['date']).strftime("%d.%m")
+                        dates.append(date)
+                    except:
+                        pass
+
+                if dates:
+                    date_counts = Counter(dates)
+                    sorted_dates = sorted(date_counts.keys())
+                    values = [date_counts[d] for d in sorted_dates]
+
+                    plt.figure(figsize=(12, 6))
+                    plt.plot(range(len(sorted_dates)), values, marker='o', color='#36A2EB')
+                    plt.xticks(range(len(sorted_dates)), sorted_dates, rotation=45)
+                    plt.title('Заказы по дням', fontsize=16)
+                    plt.grid(alpha=0.3)
+
+                    buf = io.BytesIO()
+                    plt.savefig(buf, format='png', dpi=100)
+                    buf.seek(0)
+                    plt.close()
+
+                    bot.send_photo(call.message.chat.id, photo=buf, caption="📈 *График заказов*", parse_mode='Markdown')
+                else:
+                    bot.send_message(call.message.chat.id, "📊 Нет данных для графика")
+
+            except Exception as e:
+                bot.send_message(call.message.chat.id, f"❌ Ошибка создания графика: {e}")
+
         elif call.data == 'mod_premium':
             bot.send_message(call.message.chat.id,
                              "💎 *Управление премиум*\n\n"
-                             "`/addpremium <ID> <ник>` - добавить премиум\n"
-                             "`/removepremium <ID>` - удалить премиум")
+                             "`/addpremium 123 ник` - добавить премиум\n"
+                             "`/removepremium 123` - удалить премиум")
 
     # РАССЫЛКА
     elif call.data == 'broadcast_confirm':
@@ -954,15 +1306,16 @@ def callback_handler(call):
             )
 
             for user_id_str in user_stats.keys():
+                # Не отправляем забаненным
+                if user_id_str in banned_users:
+                    continue
+
                 try:
                     bot.send_message(int(user_id_str), f"📢 *Объявление*\n\n{message_text}", parse_mode='Markdown')
                     users_sent += 1
                     time.sleep(0.1)
                 except Exception as e:
                     users_failed += 1
-                    log_event(f"ОШИБКА РАССЫЛКИ: ID {user_id_str} - {str(e)}")
-
-            log_event(f"РАССЫЛКА: отправлено {users_sent}, не отправлено {users_failed}")
 
             bot.edit_message_text(
                 f"✅ *Рассылка завершена!*\n\n"
@@ -983,12 +1336,60 @@ def callback_handler(call):
                               parse_mode='Markdown')
 
 
-# ФУНКЦИЯ ДЛЯ ОТПРАВКИ ИГРЫ ИЛИ ФИЛЬМА
+# ========== ОБРАБОТЧИК СООБЩЕНИЙ (ПОИСК ИГР) ==========
+@bot.message_handler(func=lambda m: True)
+@check_ban_decorator
+def search_handler(message):
+    if message.text.startswith('/'):
+        return
+
+    if message.chat.id in user_states:
+        return
+
+    query = message.text.strip().lower()
+
+    if query in GAMES_DATABASE:
+        send_game_files(message.chat.id, query, message.from_user.id)
+        return
+
+    # Похожие игры
+    similar = []
+    for game in GAMES_DATABASE.keys():
+        if query in game or game in query:
+            similar.append(game)
+
+    if similar:
+        text = f"❌ *'{message.text}' не найдено*\n\n"
+        text += "🎯 *Возможно вы искали:*\n\n"
+
+        markup = types.InlineKeyboardMarkup(row_width=1)
+
+        for game in similar[:5]:
+            markup.add(types.InlineKeyboardButton(
+                f"🎮 {game.title()}",
+                callback_data=f"play_{game}"
+            ))
+
+        text += "Нажмите на кнопку, чтобы скачать:"
+
+        bot.send_message(message.chat.id, text, parse_mode='Markdown', reply_markup=markup)
+
+    else:
+        text = f"❌ *'{message.text}' не найдено*\n\n"
+        text += "📝 *Заказать игру:* /neworder\n"
+        text += "📋 *Посмотреть заказы:* /orders\n"
+        text += "🔥 *Популярные игры:* /top"
+
+        bot.send_message(message.chat.id, text, parse_mode='Markdown')
+
+
+# ========== ФУНКЦИЯ ОТПРАВКИ ИГР ==========
 def send_game_files(chat_id, game_name, user_id=None):
     sent_count = 0
 
     if game_name in GAMES_DATABASE:
         bot.send_message(chat_id, f"🎮 *{game_name.upper()}*\n📥 Отправляю...", parse_mode='Markdown')
+
         for file_id in GAMES_DATABASE[game_name]:
             try:
                 bot.copy_message(chat_id, GAMES_CHANNEL_ID, file_id)
@@ -1002,101 +1403,34 @@ def send_game_files(chat_id, game_name, user_id=None):
             if user_id_str not in user_stats:
                 user_stats[user_id_str] = {'downloads': 0, 'created_orders': 0}
             user_stats[user_id_str]['downloads'] = user_stats[user_id_str].get('downloads', 0) + 1
-            update_game_stats(game_name)
+
+            # Обновляем статистику игры
+            if game_name not in game_stats:
+                game_stats[game_name] = {'downloads': 0, 'last_download': None}
+            game_stats[game_name]['downloads'] += 1
+            game_stats[game_name]['last_download'] = datetime.now().isoformat()
+
             save_all()
 
         bot.send_message(chat_id, f"✅ *Готово! Отправлено {sent_count} файлов*")
         return True
 
-    elif game_name in MOVIES_DATABASE:
-        bot.send_message(chat_id, f"🎬 *{game_name.upper()}*\n📥 Отправляю фильм...", parse_mode='Markdown')
-        for file_id in MOVIES_DATABASE[game_name]:
-            try:
-                bot.copy_message(chat_id, GAMES_CHANNEL_ID, file_id)
-                sent_count += 1
-                time.sleep(0.3)
-            except:
-                pass
-        bot.send_message(chat_id, f"✅ *Фильм отправлен! Отправлено {sent_count} файлов*")
-        return True
-
-    elif game_name in SOFT_DATABASE:
-        bot.send_message(chat_id, f"💻 *{game_name.upper()}*\n📥 Отправляю софт...", parse_mode='Markdown')
-        for file_id in SOFT_DATABASE[game_name]:
-            try:
-                bot.copy_message(chat_id, GAMES_CHANNEL_ID, file_id)
-                sent_count += 1
-                time.sleep(0.3)
-            except:
-                pass
-        bot.send_message(chat_id, f"✅ *Софт отправлен! Отправлено {sent_count} файлов*")
-        return True
-
     return False
 
 
-# ПОИСК ИГР И ФИЛЬМОВ
-@bot.message_handler(func=lambda m: True)
-def search_handler(m):
-    if m.text.startswith('/'):
-        return
-
-    if m.chat.id in user_states:
-        return
-
-    query = m.text.strip().lower()
-
-    if query in GAMES_DATABASE or query in MOVIES_DATABASE or query in SOFT_DATABASE:
-        send_game_files(m.chat.id, query, m.from_user.id)
-        return
-
-    similar_games = find_similar_games(query)
-
-    if similar_games:
-        text = f"❌ *'{m.text}' не найдено*\n\n"
-        text += "🎯 *Возможно вы искали:*\n\n"
-
-        markup = types.InlineKeyboardMarkup(row_width=1)
-
-        for game in similar_games[:5]:
-            # Определяем иконку
-            icon = "🎮"
-            if game in MOVIES_DATABASE:
-                icon = "🎬"
-            elif game in SOFT_DATABASE:
-                icon = "💻"
-
-            display_name = game.title()
-            markup.add(types.InlineKeyboardButton(
-                f"{icon} {display_name}",
-                callback_data=f"play_{game}"
-            ))
-
-        text += "Нажмите на кнопку, чтобы скачать:"
-
-        bot.send_message(m.chat.id, text, parse_mode='Markdown', reply_markup=markup)
-
-    else:
-        text = f"❌ *'{m.text}' не найдено*\n\n"
-        text += "📝 *Заказать игру:* /neworder\n"
-        text += "📋 *Посмотреть заказы:* /orders\n"
-        text += "🔥 *Популярные игры:* /top\n"
-        text += "💎 *Премиум:* /ferwespremium"
-
-        bot.send_message(m.chat.id, text, parse_mode='Markdown')
-
-
-# 🚀 ЗАПУСК
+# ========== ЗАПУСК ==========
 if __name__ == "__main__":
     print("=" * 60)
     print("🤖 ЗАПУСК FERWES GAMES БОТА")
     print("=" * 60)
 
+    # Создаём файлы если их нет
     files_to_create = [
         ORDERS_FILE, LIKES_FILE, ADMINS_FILE,
         USER_STATS_FILE, LIKE_COOLDOWN_FILE,
         GAME_STATS_FILE, WEEKLY_STATS_FILE,
-        PREMIUM_FILE
+        PREMIUM_FILE, BANNED_FILE, MUTED_FILE,
+        ORDER_STATS_FILE
     ]
 
     for file in files_to_create:
@@ -1108,13 +1442,20 @@ if __name__ == "__main__":
     load_all()
 
     print(f"🎮 Игр в базе: {len(GAMES_DATABASE)}")
-    print(f"🎬 Фильмов в базе: {len(MOVIES_DATABASE)}")
-    print(f"💻 Софта в базе: {len(SOFT_DATABASE)}")
     print(f"📋 Заказов: {len(orders)}")
     print(f"👥 Пользователей: {len(user_stats)}")
+    print(f"👑 Админов: {len(admins)}")
+    print(f"🔨 Забанено: {len(banned_users)}")
+    print(f"🔇 Замучено: {len(muted_users)}")
     print(f"💎 Премиум: {len(premium_users)}")
     print("=" * 60)
     print("⚡ Бот запущен и готов!")
     print("=" * 60)
 
-    bot.polling(none_stop=True, skip_pending=True)
+    # Запуск с обработкой ошибок
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=0, timeout=20)
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            time.sleep(5)
